@@ -1,9 +1,11 @@
 /**
- * OpenCompress — Save tokens, sharpen quality on every LLM call.
+ * OpenCompress for OpenClaw
  *
  * Registers as an OpenClaw Provider. Users select opencompress/* models.
  * Local HTTP proxy compresses requests via opencompress.ai, then forwards
  * to the user's upstream provider. Keys never leave your machine.
+ *
+ * Auto-provisions API key on first load. No onboard step needed.
  */
 type ModelApi = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 type ModelDefinitionConfig = {

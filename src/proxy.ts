@@ -7,7 +7,7 @@
  */
 
 import http from "http";
-import { PROXY_PORT, PROXY_HOST, OCC_API } from "./config.js";
+import { VERSION, PROXY_PORT, PROXY_HOST, OCC_API } from "./config.js";
 import { resolveUpstream, type ProviderConfig } from "./models.js";
 
 type GetProviders = () => Record<string, ProviderConfig>;
@@ -22,7 +22,42 @@ export function startProxy(getProviders: GetProviders, getOccKey: GetOccKey): ht
     // Health check
     if (req.url === "/health" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", version: "2.0.0" }));
+      res.end(JSON.stringify({ status: "ok", version: VERSION }));
+      return;
+    }
+
+    // Provision endpoint — plugin calls this instead of fetch() directly
+    if (req.url === "/provision" && req.method === "POST") {
+      try {
+        const provRes = await fetch(`${OCC_API}/v1/provision`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source: "openclaw-plugin" }),
+        });
+        const data = await provRes.text();
+        res.writeHead(provRes.status, { "Content-Type": "application/json" });
+        res.end(data);
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: String(err) } }));
+      }
+      return;
+    }
+
+    // Stats endpoint — plugin calls this instead of fetch() directly
+    if (req.url === "/stats" && req.method === "GET") {
+      const authHeader = req.headers["authorization"] || "";
+      try {
+        const statsRes = await fetch(`${OCC_API}/user/stats`, {
+          headers: { Authorization: authHeader },
+        });
+        const data = await statsRes.text();
+        res.writeHead(statsRes.status, { "Content-Type": "application/json" });
+        res.end(data);
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: String(err) } }));
+      }
       return;
     }
 
@@ -132,10 +167,27 @@ export function startProxy(getProviders: GetProviders, getOccKey: GetOccKey): ht
             return;
           }
 
+          // Read compression stats from response headers
+          const origTokens = parseInt(occRes.headers.get("x-opencompress-original-tokens") || "0", 10);
+          const compTokens = parseInt(occRes.headers.get("x-opencompress-compressed-tokens") || "0", 10);
+          const tokensSaved = origTokens - compTokens;
+
           // Pipe SSE response
           for await (const chunk of occRes.body as AsyncIterable<Uint8Array>) {
             res.write(chunk);
           }
+
+          // Append savings footer as a final text delta (if we actually saved tokens)
+          if (tokensSaved > 0 && isMessages) {
+            const savingsText = `\n\n---\n_Compressed by OpenCompress: ${tokensSaved} input tokens saved_`;
+            const deltaEvent = {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: savingsText },
+            };
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify(deltaEvent)}\n\n`);
+          }
+
           res.end();
         } catch (err) {
           clearInterval(heartbeat);
@@ -187,11 +239,12 @@ export function startProxy(getProviders: GetProviders, getOccKey: GetOccKey): ht
     // Proxy started
   });
 
-  // Handle port in use
+  // Handle port in use — previous proxy instance likely still running, just reuse it
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
-      // Port already in use — another instance may be running
       server = null;
+      // Port already taken — likely a previous gateway instance's proxy.
+      // Don't force-kill; just skip and let the existing proxy serve requests.
     }
   });
 

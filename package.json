@@ -1,6 +1,6 @@
 {
   "name": "@opencompress/openclaw",
-  "version": "3.0.0",
+  "version": "3.0.13",
   "description": "OpenCompress for OpenClaw — save tokens and sharpen quality on any LLM",
   "type": "module",
   "main": "dist/index.js",
